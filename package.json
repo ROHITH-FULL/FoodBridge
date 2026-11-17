@@ -1,0 +1,17 @@
+{
+  "name": "foodbridge",
+  "version": "1.0.0",
+  "description": "Smart Surplus Food Recovery and Redistribution Platform",
+  "private": true,
+  "scripts": {
+    "dev:server": "node server/src/server.js",
+    "dev:client": "npm.cmd --prefix client run dev",
+    "dev": "node scripts/start-dev.js",
+    "seed": "node server/src/database/seedData.js",
+    "test": "node --test server/tests/*.test.js",
+    "build": "npm.cmd --prefix client run build"
+  },
+  "keywords": ["food-recovery", "sustainability", "social-impact", "react", "express", "sqlite"],
+  "author": "FoodBridge Team",
+  "license": "MIT"
+}

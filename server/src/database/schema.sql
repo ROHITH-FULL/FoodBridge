@@ -1,0 +1,109 @@
+-- FoodBridge Relational Database Schema (SQLite)
+
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  full_name TEXT NOT NULL,
+  email TEXT UNIQUE NOT NULL,
+  mobile TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('ORGANIZER', 'NGO', 'ADMIN')),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS organizations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  organization_name TEXT NOT NULL,
+  registration_details TEXT,
+  address TEXT NOT NULL,
+  city TEXT NOT NULL,
+  postal_code TEXT NOT NULL,
+  latitude REAL,
+  longitude REAL,
+  collection_capacity_kg REAL NOT NULL DEFAULT 50.0,
+  availability_information TEXT DEFAULT 'Mon-Sun 08:00 - 22:00',
+  verification_status TEXT NOT NULL DEFAULT 'PENDING' CHECK(verification_status IN ('PENDING', 'VERIFIED', 'REJECTED')),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS food_listings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  organizer_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  category TEXT NOT NULL,
+  description TEXT,
+  quantity_kg REAL NOT NULL,
+  estimated_servings INTEGER,
+  preparation_time TEXT NOT NULL,
+  dietary_type TEXT DEFAULT 'VEGETARIAN' CHECK(dietary_type IN ('VEGETARIAN', 'NON_VEGETARIAN', 'VEGAN', 'OTHER')),
+  storage_information TEXT NOT NULL,
+  address TEXT NOT NULL,
+  area TEXT,
+  city TEXT NOT NULL,
+  postal_code TEXT NOT NULL,
+  pickup_deadline TEXT NOT NULL,
+  contact_person TEXT NOT NULL,
+  contact_phone TEXT NOT NULL,
+  image_url TEXT,
+  safety_declaration INTEGER NOT NULL DEFAULT 1,
+  eligibility_status TEXT NOT NULL DEFAULT 'ELIGIBLE' CHECK(eligibility_status IN ('ELIGIBLE', 'FLAGGED', 'INELIGIBLE')),
+  listing_status TEXT NOT NULL DEFAULT 'AVAILABLE' CHECK(listing_status IN ('AVAILABLE', 'CLAIMED', 'COMPLETED', 'CANCELLED', 'EXPIRED')),
+  is_demo INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS donation_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  food_listing_id INTEGER NOT NULL REFERENCES food_listings(id) ON DELETE CASCADE,
+  organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  request_status TEXT NOT NULL DEFAULT 'REQUESTED' CHECK(request_status IN ('REQUESTED', 'ACCEPTED', 'PICKUP_SCHEDULED', 'COLLECTED', 'HANDED_OVER', 'CANCELLED', 'REJECTED')),
+  requested_at TEXT DEFAULT (datetime('now')),
+  accepted_at TEXT,
+  pickup_scheduled_at TEXT,
+  collected_at TEXT,
+  handed_over_at TEXT,
+  scheduled_pickup_time TEXT,
+  collected_quantity_kg REAL,
+  handed_over_quantity_kg REAL,
+  pickup_confirmation_code TEXT,
+  cancellation_reason TEXT,
+  is_demo INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS status_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id INTEGER NOT NULL REFERENCES donation_requests(id) ON DELETE CASCADE,
+  previous_status TEXT,
+  new_status TEXT NOT NULL,
+  changed_by INTEGER REFERENCES users(id),
+  timestamp TEXT DEFAULT (datetime('now')),
+  notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS organization_verifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  review_status TEXT NOT NULL CHECK(review_status IN ('VERIFIED', 'REJECTED')),
+  reviewer_id INTEGER NOT NULL REFERENCES users(id),
+  review_notes TEXT,
+  reviewed_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  reporter_id INTEGER NOT NULL REFERENCES users(id),
+  listing_id INTEGER REFERENCES food_listings(id),
+  request_id INTEGER REFERENCES donation_requests(id),
+  reason TEXT NOT NULL,
+  details TEXT,
+  report_status TEXT NOT NULL DEFAULT 'PENDING' CHECK(report_status IN ('PENDING', 'INVESTIGATING', 'RESOLVED', 'DISMISSED')),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_food_listings_status ON food_listings(listing_status);
+CREATE INDEX IF NOT EXISTS idx_food_listings_city ON food_listings(city);
+CREATE INDEX IF NOT EXISTS idx_donation_requests_listing ON donation_requests(food_listing_id);
+CREATE INDEX IF NOT EXISTS idx_donation_requests_org ON donation_requests(organization_id);
+CREATE INDEX IF NOT EXISTS idx_donation_requests_status ON donation_requests(request_status);
