@@ -1,4 +1,5 @@
-const { query, get } = require('../database/db');
+
+const { query, get } = require('../database/db.postgres');
 
 /**
  * Smart Rule-Based Matching Engine
@@ -58,6 +59,7 @@ function scoreMatch(listing, organization) {
   // 3. Location & Area Match (Max 25 pts)
   const samePostal = listing.postal_code && organization.postal_code &&
     listing.postal_code.trim().toLowerCase() === organization.postal_code.trim().toLowerCase();
+
   const sameCity = listing.city && organization.city &&
     listing.city.trim().toLowerCase() === organization.city.trim().toLowerCase();
 
@@ -133,97 +135,134 @@ function scoreMatch(listing, organization) {
   return {
     score: Math.min(100, score),
     matchTier,
-    factors,
+    factors
   };
 }
 
 // Get matched organizations for a specific food listing
-function getMatchesForListing(req, res) {
-  const { id } = req.params;
-  const listing = get('SELECT * FROM food_listings WHERE id = ?', [id]);
+async function getMatchesForListing(req, res) {
+  try {
+    const { id } = req.params;
 
-  if (!listing) {
-    return res.status(404).json({ success: false, message: 'Food listing not found.' });
+    const listing = await get(
+      'SELECT * FROM food_listings WHERE id = $1',
+      [id]
+    );
+
+    if (!listing) {
+      return res.status(404).json({
+        success: false,
+        message: 'Food listing not found.'
+      });
+    }
+
+    const organizations = await query(`
+      SELECT o.*,
+        u.full_name AS contact_name,
+        u.email AS contact_email,
+        u.mobile AS contact_mobile
+      FROM organizations o
+      JOIN users u ON o.user_id = u.id
+      ORDER BY o.verification_status DESC, o.collection_capacity_kg DESC
+    `);
+
+    const scoredOrgs = organizations.map(org => {
+      const matchAnalysis = scoreMatch(listing, org);
+
+      return {
+        organization: {
+          id: org.id,
+          organization_name: org.organization_name,
+          verification_status: org.verification_status,
+          collection_capacity_kg: org.collection_capacity_kg,
+          address: org.address,
+          city: org.city,
+          postal_code: org.postal_code,
+          contact_name: org.contact_name,
+          contact_mobile: org.contact_mobile,
+          availability_information: org.availability_information
+        },
+        ...matchAnalysis
+      };
+    });
+
+    scoredOrgs.sort((a, b) => b.score - a.score);
+
+    return res.json({
+      success: true,
+      listing_id: Number(id),
+      listing_title: listing.title,
+      matches: scoredOrgs
+    });
+  } catch (err) {
+    console.error('Error matching organizations:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve matching organizations.'
+    });
   }
+}
 
-  const organizations = query(`
-    SELECT o.*, u.full_name as contact_name, u.email as contact_email, u.mobile as contact_mobile
-    FROM organizations o
-    JOIN users u ON o.user_id = u.id
-    ORDER BY o.verification_status DESC, o.collection_capacity_kg DESC
-  `);
+// Get matched food listings for a specific organization or logged-in NGO
+async function getMatchesForNgo(req, res) {
+  try {
+    let org = req.organization;
 
-  const scoredOrgs = organizations.map(org => {
-    const matchAnalysis = scoreMatch(listing, org);
-    return {
+    if (!org && req.params.orgId) {
+      org = await get(
+        'SELECT * FROM organizations WHERE id = $1',
+        [req.params.orgId]
+      );
+    }
+
+    if (!org) {
+      return res.status(400).json({
+        success: false,
+        message: 'No organization profile found.'
+      });
+    }
+
+    const listings = await query(`
+      SELECT f.*, u.full_name AS organizer_name
+      FROM food_listings f
+      JOIN users u ON f.organizer_id = u.id
+      WHERE f.listing_status = 'AVAILABLE'
+        AND f.pickup_deadline > NOW()
+      ORDER BY f.pickup_deadline ASC
+    `);
+
+    const scoredListings = listings.map(item => {
+      const matchAnalysis = scoreMatch(item, org);
+
+      return {
+        listing: item,
+        ...matchAnalysis
+      };
+    });
+
+    scoredListings.sort((a, b) => b.score - a.score);
+
+    return res.json({
+      success: true,
       organization: {
         id: org.id,
         organization_name: org.organization_name,
         verification_status: org.verification_status,
-        collection_capacity_kg: org.collection_capacity_kg,
-        address: org.address,
-        city: org.city,
-        postal_code: org.postal_code,
-        contact_name: org.contact_name,
-        contact_mobile: org.contact_mobile,
-        availability_information: org.availability_information,
+        collection_capacity_kg: org.collection_capacity_kg
       },
-      ...matchAnalysis
-    };
-  });
-
-  // Sort descending by score
-  scoredOrgs.sort((a, b) => b.score - a.score);
-
-  return res.json({
-    success: true,
-    listing_id: Number(id),
-    listing_title: listing.title,
-    matches: scoredOrgs
-  });
-}
-
-// Get matched food listings for a specific organization (or current logged in NGO)
-function getMatchesForNgo(req, res) {
-  const org = req.organization || (req.params.orgId ? get('SELECT * FROM organizations WHERE id = ?', [req.params.orgId]) : null);
-
-  if (!org) {
-    return res.status(400).json({ success: false, message: 'No organization profile found.' });
+      matches: scoredListings
+    });
+  } catch (err) {
+    console.error('Error matching food listings:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve matching food listings.'
+    });
   }
-
-  const listings = query(`
-    SELECT f.*, u.full_name as organizer_name
-    FROM food_listings f
-    JOIN users u ON f.organizer_id = u.id
-    WHERE f.listing_status = 'AVAILABLE'
-      AND datetime(f.pickup_deadline) > datetime('now')
-    ORDER BY f.pickup_deadline ASC
-  `);
-
-  const scoredListings = listings.map(item => {
-    const matchAnalysis = scoreMatch(item, org);
-    return {
-      listing: item,
-      ...matchAnalysis
-    };
-  });
-
-  scoredListings.sort((a, b) => b.score - a.score);
-
-  return res.json({
-    success: true,
-    organization: {
-      id: org.id,
-      organization_name: org.organization_name,
-      verification_status: org.verification_status,
-      collection_capacity_kg: org.collection_capacity_kg,
-    },
-    matches: scoredListings
-  });
 }
 
 module.exports = {
   scoreMatch,
   getMatchesForListing,
-  getMatchesForNgo,
+  getMatchesForNgo
 };

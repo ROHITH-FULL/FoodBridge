@@ -1,40 +1,59 @@
-const { query, get, exec } = require('../database/db');
-const { seedData } = require('../database/seedData');
 
-function getOrganizerDashboard(req, res) {
-  const userId = req.user.id;
+const { query, get } = require('../database/db.postgres');
 
+const toNumber = (value) => Number(value || 0);
+
+function formatStats(stats, fields) {
+  const formatted = {};
+
+  for (const field of fields) {
+    formatted[field] = toNumber(stats[field]);
+  }
+
+  return formatted;
+}
+
+async function getOrganizerDashboard(req, res) {
   try {
-    const stats = get(`
+    const userId = req.user.id;
+
+    const stats = await get(`
       SELECT
-        COUNT(*) as total_listings,
-        SUM(CASE WHEN listing_status = 'AVAILABLE' THEN 1 ELSE 0 END) as available_listings,
-        SUM(CASE WHEN listing_status = 'CLAIMED' THEN 1 ELSE 0 END) as in_progress_listings,
-        SUM(CASE WHEN listing_status = 'COMPLETED' THEN 1 ELSE 0 END) as completed_listings,
-        SUM(CASE WHEN listing_status = 'CANCELLED' THEN 1 ELSE 0 END) as cancelled_listings,
-        COALESCE(SUM(quantity_kg), 0) as total_kg_listed
+        COUNT(*) AS total_listings,
+        SUM(CASE WHEN listing_status = 'AVAILABLE' THEN 1 ELSE 0 END) AS available_listings,
+        SUM(CASE WHEN listing_status = 'CLAIMED' THEN 1 ELSE 0 END) AS in_progress_listings,
+        SUM(CASE WHEN listing_status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed_listings,
+        SUM(CASE WHEN listing_status = 'CANCELLED' THEN 1 ELSE 0 END) AS cancelled_listings,
+        COALESCE(SUM(quantity_kg), 0) AS total_kg_listed
       FROM food_listings
-      WHERE organizer_id = ?
+      WHERE organizer_id = $1
     `, [userId]);
 
-    const activeRequests = query(`
-      SELECT r.*, f.title as food_title, f.quantity_kg, o.organization_name, o.verification_status,
-        u.mobile as ngo_phone
+    const activeRequests = await query(`
+      SELECT r.*, f.title AS food_title, f.quantity_kg,
+        o.organization_name, o.verification_status,
+        u.mobile AS ngo_phone
       FROM donation_requests r
       JOIN food_listings f ON r.food_listing_id = f.id
       JOIN organizations o ON r.organization_id = o.id
       JOIN users u ON o.user_id = u.id
-      WHERE f.organizer_id = ? AND r.request_status IN ('REQUESTED', 'ACCEPTED', 'PICKUP_SCHEDULED')
+      WHERE f.organizer_id = $1
+        AND r.request_status IN ('REQUESTED', 'ACCEPTED', 'PICKUP_SCHEDULED')
       ORDER BY r.requested_at DESC
     `, [userId]);
 
-    const recentListings = query(`
+    const recentListings = await query(`
       SELECT f.*,
-        (SELECT COUNT(*) FROM donation_requests r WHERE r.food_listing_id = f.id) as request_count,
-        (SELECT r.request_status FROM donation_requests r WHERE r.food_listing_id = f.id ORDER BY r.id DESC LIMIT 1) as current_status,
-        (SELECT r.pickup_confirmation_code FROM donation_requests r WHERE r.food_listing_id = f.id ORDER BY r.id DESC LIMIT 1) as pickup_code
+        (SELECT COUNT(*) FROM donation_requests r
+         WHERE r.food_listing_id = f.id) AS request_count,
+        (SELECT r.request_status FROM donation_requests r
+         WHERE r.food_listing_id = f.id
+         ORDER BY r.id DESC LIMIT 1) AS current_status,
+        (SELECT r.pickup_confirmation_code FROM donation_requests r
+         WHERE r.food_listing_id = f.id
+         ORDER BY r.id DESC LIMIT 1) AS pickup_code
       FROM food_listings f
-      WHERE f.organizer_id = ?
+      WHERE f.organizer_id = $1
       ORDER BY f.created_at DESC
       LIMIT 10
     `, [userId]);
@@ -42,129 +61,148 @@ function getOrganizerDashboard(req, res) {
     return res.json({
       success: true,
       stats: {
-        total_listings: stats.total_listings || 0,
-        available_listings: stats.available_listings || 0,
-        in_progress_listings: stats.in_progress_listings || 0,
-        completed_listings: stats.completed_listings || 0,
-        cancelled_listings: stats.cancelled_listings || 0,
-        total_kg_listed: Number(stats.total_kg_listed.toFixed(1)),
+        ...formatStats(stats, [
+          'total_listings',
+          'available_listings',
+          'in_progress_listings',
+          'completed_listings',
+          'cancelled_listings'
+        ]),
+        total_kg_listed: Number(toNumber(stats.total_kg_listed).toFixed(1))
       },
       active_requests: activeRequests,
       recent_listings: recentListings
     });
   } catch (err) {
     console.error('Error in organizer dashboard:', err);
-    return res.status(500).json({ success: false, message: 'Failed to retrieve organizer dashboard data.' });
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve organizer dashboard data.'
+    });
   }
 }
 
-function getNgoDashboard(req, res) {
-  const org = req.organization;
-  if (!org) {
-    return res.status(400).json({ success: false, message: 'Organization profile required.' });
-  }
-
+async function getNgoDashboard(req, res) {
   try {
-    const stats = get(`
+    const org = req.organization;
+
+    if (!org) {
+      return res.status(400).json({
+        success: false,
+        message: 'Organization profile required.'
+      });
+    }
+
+    const stats = await get(`
       SELECT
-        COUNT(*) as total_requests,
-        SUM(CASE WHEN request_status IN ('ACCEPTED', 'PICKUP_SCHEDULED') THEN 1 ELSE 0 END) as active_pickups,
-        SUM(CASE WHEN request_status = 'HANDED_OVER' THEN 1 ELSE 0 END) as completed_handovers,
-        COALESCE(SUM(collected_quantity_kg), 0) as total_kg_collected,
-        COALESCE(SUM(handed_over_quantity_kg), 0) as total_kg_handed_over
+        COUNT(*) AS total_requests,
+        SUM(CASE WHEN request_status IN ('ACCEPTED', 'PICKUP_SCHEDULED') THEN 1 ELSE 0 END) AS active_pickups,
+        SUM(CASE WHEN request_status = 'HANDED_OVER' THEN 1 ELSE 0 END) AS completed_handovers,
+        COALESCE(SUM(collected_quantity_kg), 0) AS total_kg_collected,
+        COALESCE(SUM(handed_over_quantity_kg), 0) AS total_kg_handed_over
       FROM donation_requests
-      WHERE organization_id = ?
+      WHERE organization_id = $1
     `, [org.id]);
 
-    const activePickups = query(`
-      SELECT r.*, f.title as food_title, f.category as food_category, f.quantity_kg,
-        f.address as pickup_address, f.area as pickup_area, f.city as pickup_city,
-        f.pickup_deadline, f.contact_person, f.contact_phone,
-        u.full_name as donor_name
+    const activePickups = await query(`
+      SELECT r.*, f.title AS food_title,
+        f.category AS food_category, f.quantity_kg,
+        f.address AS pickup_address, f.area AS pickup_area,
+        f.city AS pickup_city, f.pickup_deadline,
+        f.contact_person, f.contact_phone,
+        u.full_name AS donor_name
       FROM donation_requests r
       JOIN food_listings f ON r.food_listing_id = f.id
       JOIN users u ON f.organizer_id = u.id
-      WHERE r.organization_id = ? AND r.request_status IN ('ACCEPTED', 'PICKUP_SCHEDULED')
+      WHERE r.organization_id = $1
+        AND r.request_status IN ('ACCEPTED', 'PICKUP_SCHEDULED')
       ORDER BY r.requested_at DESC
     `, [org.id]);
 
-    const nearbyCount = get(`
-      SELECT COUNT(*) as count
+    const nearbyCount = await get(`
+      SELECT COUNT(*) AS count
       FROM food_listings
       WHERE listing_status = 'AVAILABLE'
-        AND datetime(pickup_deadline) > datetime('now')
-        AND (LOWER(city) = LOWER(?) OR postal_code = ?)
+        AND pickup_deadline > NOW()
+        AND (LOWER(city) = LOWER($1) OR postal_code = $2)
     `, [org.city, org.postal_code]);
 
     return res.json({
       success: true,
       organization: org,
       stats: {
-        total_requests: stats.total_requests || 0,
-        active_pickups: stats.active_pickups || 0,
-        completed_handovers: stats.completed_handovers || 0,
-        total_kg_collected: Number(stats.total_kg_collected.toFixed(1)),
-        total_kg_handed_over: Number(stats.total_kg_handed_over.toFixed(1)),
-        nearby_available_count: nearbyCount.count || 0
+        ...formatStats(stats, [
+          'total_requests',
+          'active_pickups',
+          'completed_handovers'
+        ]),
+        total_kg_collected: Number(toNumber(stats.total_kg_collected).toFixed(1)),
+        total_kg_handed_over: Number(toNumber(stats.total_kg_handed_over).toFixed(1)),
+        nearby_available_count: toNumber(nearbyCount.count)
       },
       active_pickups: activePickups
     });
   } catch (err) {
     console.error('Error in NGO dashboard:', err);
-    return res.status(500).json({ success: false, message: 'Failed to retrieve NGO dashboard data.' });
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve NGO dashboard data.'
+    });
   }
 }
 
-function getAdminDashboard(req, res) {
+async function getAdminDashboard(req, res) {
   try {
-    const userStats = get(`
+    const userStats = await get(`
       SELECT
-        COUNT(*) as total_users,
-        SUM(CASE WHEN role = 'ORGANIZER' THEN 1 ELSE 0 END) as organizers_count,
-        SUM(CASE WHEN role = 'NGO' THEN 1 ELSE 0 END) as ngos_count,
-        SUM(CASE WHEN role = 'ADMIN' THEN 1 ELSE 0 END) as admins_count
+        COUNT(*) AS total_users,
+        SUM(CASE WHEN role = 'ORGANIZER' THEN 1 ELSE 0 END) AS organizers_count,
+        SUM(CASE WHEN role = 'NGO' THEN 1 ELSE 0 END) AS ngos_count,
+        SUM(CASE WHEN role = 'ADMIN' THEN 1 ELSE 0 END) AS admins_count
       FROM users
     `);
 
-    const orgStats = get(`
+    const orgStats = await get(`
       SELECT
-        COUNT(*) as total_organizations,
-        SUM(CASE WHEN verification_status = 'VERIFIED' THEN 1 ELSE 0 END) as verified_count,
-        SUM(CASE WHEN verification_status = 'PENDING' THEN 1 ELSE 0 END) as pending_count,
-        SUM(CASE WHEN verification_status = 'REJECTED' THEN 1 ELSE 0 END) as rejected_count
+        COUNT(*) AS total_organizations,
+        SUM(CASE WHEN verification_status = 'VERIFIED' THEN 1 ELSE 0 END) AS verified_count,
+        SUM(CASE WHEN verification_status = 'PENDING' THEN 1 ELSE 0 END) AS pending_count,
+        SUM(CASE WHEN verification_status = 'REJECTED' THEN 1 ELSE 0 END) AS rejected_count
       FROM organizations
     `);
 
-    const listingStats = get(`
+    const listingStats = await get(`
       SELECT
-        COUNT(*) as total_listings,
-        SUM(CASE WHEN listing_status = 'AVAILABLE' THEN 1 ELSE 0 END) as available_count,
-        SUM(CASE WHEN listing_status = 'CLAIMED' THEN 1 ELSE 0 END) as claimed_count,
-        SUM(CASE WHEN listing_status = 'COMPLETED' THEN 1 ELSE 0 END) as completed_count,
-        SUM(CASE WHEN listing_status = 'CANCELLED' THEN 1 ELSE 0 END) as cancelled_count,
-        COALESCE(SUM(quantity_kg), 0) as total_kg_listed
+        COUNT(*) AS total_listings,
+        SUM(CASE WHEN listing_status = 'AVAILABLE' THEN 1 ELSE 0 END) AS available_count,
+        SUM(CASE WHEN listing_status = 'CLAIMED' THEN 1 ELSE 0 END) AS claimed_count,
+        SUM(CASE WHEN listing_status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed_count,
+        SUM(CASE WHEN listing_status = 'CANCELLED' THEN 1 ELSE 0 END) AS cancelled_count,
+        COALESCE(SUM(quantity_kg), 0) AS total_kg_listed
       FROM food_listings
     `);
 
-    const requestStats = get(`
+    const requestStats = await get(`
       SELECT
-        COUNT(*) as total_requests,
-        SUM(CASE WHEN request_status = 'HANDED_OVER' THEN 1 ELSE 0 END) as completed_handovers,
-        COALESCE(SUM(collected_quantity_kg), 0) as total_kg_collected,
-        COALESCE(SUM(handed_over_quantity_kg), 0) as total_kg_redistributed
+        COUNT(*) AS total_requests,
+        SUM(CASE WHEN request_status = 'HANDED_OVER' THEN 1 ELSE 0 END) AS completed_handovers,
+        COALESCE(SUM(collected_quantity_kg), 0) AS total_kg_collected,
+        COALESCE(SUM(handed_over_quantity_kg), 0) AS total_kg_redistributed
       FROM donation_requests
     `);
 
-    const pendingOrgs = query(`
-      SELECT o.*, u.full_name as contact_name, u.email as contact_email, u.mobile as contact_mobile
+    const pendingOrgs = await query(`
+      SELECT o.*, u.full_name AS contact_name,
+        u.email AS contact_email, u.mobile AS contact_mobile
       FROM organizations o
       JOIN users u ON o.user_id = u.id
       WHERE o.verification_status = 'PENDING'
       ORDER BY o.created_at ASC
     `);
 
-    const recentReports = query(`
-      SELECT rep.*, u.full_name as reporter_name, f.title as listing_title
+    const recentReports = await query(`
+      SELECT rep.*, u.full_name AS reporter_name,
+        f.title AS listing_title
       FROM reports rep
       JOIN users u ON rep.reporter_id = u.id
       LEFT JOIN food_listings f ON rep.listing_id = f.id
@@ -174,78 +212,99 @@ function getAdminDashboard(req, res) {
 
     return res.json({
       success: true,
-      users: userStats,
-      organizations: orgStats,
-      listings: listingStats,
-      requests: requestStats,
+      users: formatStats(userStats, [
+        'total_users', 'organizers_count', 'ngos_count', 'admins_count'
+      ]),
+      organizations: formatStats(orgStats, [
+        'total_organizations', 'verified_count', 'pending_count', 'rejected_count'
+      ]),
+      listings: {
+        ...formatStats(listingStats, [
+          'total_listings', 'available_count', 'claimed_count',
+          'completed_count', 'cancelled_count'
+        ]),
+        total_kg_listed: toNumber(listingStats.total_kg_listed)
+      },
+      requests: {
+        ...formatStats(requestStats, [
+          'total_requests', 'completed_handovers'
+        ]),
+        total_kg_collected: toNumber(requestStats.total_kg_collected),
+        total_kg_redistributed: toNumber(requestStats.total_kg_redistributed)
+      },
       pending_verifications: pendingOrgs,
       recent_reports: recentReports
     });
   } catch (err) {
     console.error('Error in admin dashboard:', err);
-    return res.status(500).json({ success: false, message: 'Failed to retrieve admin dashboard data.' });
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve admin dashboard data.'
+    });
   }
 }
 
-function getImpactStats(req, res) {
-  const { dataScope } = req.query; // 'all', 'live_only', 'demo_only'
-
-  let demoFilterListings = '';
-  let demoFilterRequests = '';
-
-  if (dataScope === 'live_only') {
-    demoFilterListings = 'WHERE is_demo = 0';
-    demoFilterRequests = 'WHERE is_demo = 0';
-  } else if (dataScope === 'demo_only') {
-    demoFilterListings = 'WHERE is_demo = 1';
-    demoFilterRequests = 'WHERE is_demo = 1';
-  }
-
+async function getImpactStats(req, res) {
   try {
-    const listingTotals = get(`
+    const { dataScope } = req.query;
+
+    let demoFilterListings = '';
+    let demoFilterRequests = '';
+
+    if (dataScope === 'live_only') {
+      demoFilterListings = 'WHERE is_demo = 0';
+      demoFilterRequests = 'WHERE is_demo = 0';
+    } else if (dataScope === 'demo_only') {
+      demoFilterListings = 'WHERE is_demo = 1';
+      demoFilterRequests = 'WHERE is_demo = 1';
+    }
+
+    const listingTotals = await get(`
       SELECT
-        COUNT(*) as total_listings_count,
-        COALESCE(SUM(quantity_kg), 0) as total_kg_listed
+        COUNT(*) AS total_listings_count,
+        COALESCE(SUM(quantity_kg), 0) AS total_kg_listed
       FROM food_listings
       ${demoFilterListings}
     `);
 
-    const requestTotals = get(`
+    const requestTotals = await get(`
       SELECT
-        COUNT(*) as total_requests,
-        SUM(CASE WHEN request_status = 'HANDED_OVER' THEN 1 ELSE 0 END) as completed_handovers,
-        SUM(CASE WHEN request_status IN ('ACCEPTED', 'PICKUP_SCHEDULED', 'COLLECTED') THEN 1 ELSE 0 END) as active_pickups,
-        COALESCE(SUM(collected_quantity_kg), 0) as total_kg_collected,
-        COALESCE(SUM(handed_over_quantity_kg), 0) as total_kg_handed_over
+        COUNT(*) AS total_requests,
+        SUM(CASE WHEN request_status = 'HANDED_OVER' THEN 1 ELSE 0 END) AS completed_handovers,
+        SUM(CASE WHEN request_status IN ('ACCEPTED', 'PICKUP_SCHEDULED', 'COLLECTED') THEN 1 ELSE 0 END) AS active_pickups,
+        COALESCE(SUM(collected_quantity_kg), 0) AS total_kg_collected,
+        COALESCE(SUM(handed_over_quantity_kg), 0) AS total_kg_handed_over
       FROM donation_requests
       ${demoFilterRequests}
     `);
 
-    const activeVerifiedOrgs = get(`
-      SELECT COUNT(*) as verified_orgs_count
+    const activeVerifiedOrgs = await get(`
+      SELECT COUNT(*) AS verified_orgs_count
       FROM organizations
       WHERE verification_status = 'VERIFIED'
     `);
 
-    // Category breakdown
-    const categoryBreakdown = query(`
-      SELECT category, COUNT(*) as count, COALESCE(SUM(quantity_kg), 0) as total_kg
+    const categoryBreakdown = await query(`
+      SELECT category, COUNT(*) AS count,
+        COALESCE(SUM(quantity_kg), 0) AS total_kg
       FROM food_listings
       ${demoFilterListings}
       GROUP BY category
       ORDER BY total_kg DESC
     `);
 
-    // Handover success rate: (completed handovers / (completed + cancelled requests)) * 100
-    const completed = requestTotals.completed_handovers || 0;
-    const totalReqs = requestTotals.total_requests || 0;
-    const successRate = totalReqs > 0 ? ((completed / totalReqs) * 100).toFixed(1) : '100.0';
+    const completed = toNumber(requestTotals.completed_handovers);
+    const totalReqs = toNumber(requestTotals.total_requests);
 
-    // Estimated meals (standard benchmark: 1 meal ≈ 0.45 kg / 450 grams)
-    const handedOverKg = Number((requestTotals.total_kg_handed_over || 0).toFixed(1));
+    const successRate = totalReqs > 0
+      ? ((completed / totalReqs) * 100).toFixed(1)
+      : '100.0';
+
+    const handedOverKg = Number(
+      toNumber(requestTotals.total_kg_handed_over).toFixed(1)
+    );
+
     const estimatedMeals = Math.round(handedOverKg / 0.45);
-
-    // Demonstration disclaimer
     const isShowingDemoData = dataScope !== 'live_only';
 
     return res.json({
@@ -256,31 +315,36 @@ function getImpactStats(req, res) {
         ? 'NOTE: Current figures include fictional demonstration data for prototype evaluation. Verified real-world impact requires completed operational deployments.'
         : 'Displaying strictly live system data generated during this deployment.',
       metrics: {
-        total_kg_listed: Number(listingTotals.total_kg_listed.toFixed(1)),
-        total_kg_collected: Number((requestTotals.total_kg_collected || 0).toFixed(1)),
+        total_kg_listed: Number(toNumber(listingTotals.total_kg_listed).toFixed(1)),
+        total_kg_collected: Number(toNumber(requestTotals.total_kg_collected).toFixed(1)),
         total_kg_handed_over: handedOverKg,
         completed_handovers: completed,
-        active_pickups: requestTotals.active_pickups || 0,
-        participating_verified_ngos: activeVerifiedOrgs.verified_orgs_count || 0,
+        active_pickups: toNumber(requestTotals.active_pickups),
+        participating_verified_ngos: toNumber(activeVerifiedOrgs.verified_orgs_count),
         estimated_meals_served: estimatedMeals,
         handover_success_rate: `${successRate}%`,
-        average_pickup_hours: '1.4 hours',
+        average_pickup_hours: '1.4 hours'
       },
-      category_breakdown: categoryBreakdown,
+      category_breakdown: categoryBreakdown
     });
   } catch (err) {
     console.error('Error fetching impact stats:', err);
-    return res.status(500).json({ success: false, message: 'Failed to retrieve impact stats.' });
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve impact stats.'
+    });
   }
 }
 
-function exportImpactCsv(req, res) {
+async function exportImpactCsv(req, res) {
   try {
-    const listings = query(`
-      SELECT f.id, f.title, f.category, f.quantity_kg, f.listing_status, f.city, f.pickup_deadline,
-        r.request_status, r.collected_quantity_kg, r.handed_over_quantity_kg,
-        r.collected_at, r.handed_over_at,
-        o.organization_name
+    const listings = await query(`
+      SELECT
+        f.id, f.title, f.category, f.quantity_kg,
+        f.listing_status, f.city, f.pickup_deadline,
+        r.request_status, r.collected_quantity_kg,
+        r.handed_over_quantity_kg, r.collected_at,
+        r.handed_over_at, o.organization_name
       FROM food_listings f
       LEFT JOIN donation_requests r ON f.id = r.food_listing_id
       LEFT JOIN organizations o ON r.organization_id = o.id
@@ -290,7 +354,9 @@ function exportImpactCsv(req, res) {
     let csv = 'Listing ID,Title,Category,Listed Quantity (kg),Status,City,Pickup Deadline,Claimed By,Collected (kg),Handed Over (kg),Collected At,Handed Over At\n';
 
     listings.forEach(row => {
-      const escape = str => `"${(str || '').toString().replace(/"/g, '""')}"`;
+      const escape = value =>
+        `"${(value ?? '').toString().replace(/"/g, '""')}"`;
+
       csv += [
         row.id,
         escape(row.title),
@@ -308,22 +374,28 @@ function exportImpactCsv(req, res) {
     });
 
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="foodbridge_impact_report.csv"');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="foodbridge_impact_report.csv"'
+    );
+
     return res.send(csv);
   } catch (err) {
     console.error('Error exporting CSV:', err);
-    return res.status(500).json({ success: false, message: 'Failed to export CSV.' });
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to export CSV.'
+    });
   }
 }
 
-function resetDemoData(req, res) {
-  try {
-    seedData();
-    return res.json({ success: true, message: 'Sample demonstration data reset successfully to initial baseline.' });
-  } catch (err) {
-    console.error('Error resetting demo data:', err);
-    return res.status(500).json({ success: false, message: 'Failed to reset demonstration data.' });
-  }
+// Disabled temporarily to protect live PostgreSQL data.
+// A safe PostgreSQL-only demo reset will be implemented separately.
+async function resetDemoData(req, res) {
+  return res.status(403).json({
+    success: false,
+    message: 'Demo data reset is temporarily disabled.'
+  });
 }
 
 module.exports = {
@@ -332,5 +404,5 @@ module.exports = {
   getAdminDashboard,
   getImpactStats,
   exportImpactCsv,
-  resetDemoData,
+  resetDemoData
 };

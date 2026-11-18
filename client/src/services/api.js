@@ -1,4 +1,5 @@
-const API_BASE = '/api';
+
+const API_BASE = `${import.meta.env.VITE_API_URL || ''}/api`;
 
 function getAuthHeader() {
   const token = localStorage.getItem('fb_token');
@@ -20,7 +21,7 @@ async function request(endpoint, options = {}) {
 
   try {
     const response = await fetch(url, config);
-    
+
     // Check if response is file download (CSV)
     const contentType = response.headers.get('content-type');
     if (contentType && contentType.includes('text/csv')) {
@@ -97,7 +98,9 @@ export const api = {
   getAdminDashboard: () => request('/dashboard/admin'),
   getImpactStats: (scope = 'all') => request(`/dashboard/impact?dataScope=${scope}`),
   exportImpactCsv: async () => {
-    const res = await fetch('/api/dashboard/impact/export-csv');
+    const res = await fetch(`${API_BASE}/dashboard/impact/export-csv`, {
+      headers: getAuthHeader(),
+    });
     return await res.text();
   },
   resetDemoData: () => request('/dashboard/admin/reset-demo', { method: 'POST' }),

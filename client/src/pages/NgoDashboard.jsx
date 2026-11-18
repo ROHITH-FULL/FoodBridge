@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../services/api';
@@ -5,15 +6,11 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import StatusBadge from '../components/StatusBadge';
 import {
-  Building2,
-  ShieldCheck,
-  Clock,
   Truck,
   PackageCheck,
   Sparkles,
   MapPin,
   TrendingUp,
-  ArrowRight,
   Eye,
   AlertTriangle,
   HeartHandshake
@@ -66,7 +63,6 @@ export default function NgoDashboard() {
 
   return (
     <div className="container" style={{ padding: '3rem 1.5rem' }}>
-      {/* Header and Verification Status */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.4rem' }}>
@@ -86,7 +82,6 @@ export default function NgoDashboard() {
         </Link>
       </div>
 
-      {/* Verification Notice Banner if Pending */}
       {!isVerified && (
         <div style={{ background: 'var(--amber-light)', border: '1px solid #FCD34D', borderRadius: 'var(--radius-lg)', padding: '1.5rem', marginBottom: '2.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
@@ -106,7 +101,6 @@ export default function NgoDashboard() {
         </div>
       )}
 
-      {/* Operational Metric Cards */}
       <div className="grid-4" style={{ marginBottom: '2.5rem' }}>
         <div className="stat-card">
           <div className="stat-icon" style={{ background: '#EDE9FE', color: '#6D28D9' }}>
@@ -149,7 +143,6 @@ export default function NgoDashboard() {
         </div>
       </div>
 
-      {/* Active Pickups & Tasks */}
       <div className="card" style={{ marginBottom: '2.5rem' }}>
         <h2 style={{ fontSize: '1.35rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-main)' }}>
           <Truck size={20} color="var(--primary)" />
@@ -183,7 +176,18 @@ export default function NgoDashboard() {
                     <td>
                       <div style={{ fontWeight: 700 }}>{req.food_title}</div>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                        Donor: {req.donor_name} ({req.contact_phone})
+                        Donor: {req.donor_name} (
+                        {req.contact_phone ? (
+                          <a
+                            href={`tel:${req.contact_phone}`}
+                            style={{ color: 'var(--primary)', fontWeight: 600 }}
+                          >
+                            {req.contact_phone}
+                          </a>
+                        ) : (
+                          'Phone unavailable'
+                        )}
+                        )
                       </div>
                     </td>
                     <td>
@@ -221,7 +225,6 @@ export default function NgoDashboard() {
         )}
       </div>
 
-      {/* Recommended Rule-Based Matches */}
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
           <div>
@@ -269,7 +272,6 @@ export default function NgoDashboard() {
                   Quantity: <strong>{match.listing.quantity_kg} kg</strong> &bull; Location: {match.listing.city} ({match.listing.postal_code})
                 </p>
 
-                {/* Compatibility Highlights */}
                 <div style={{ background: 'var(--bg-subtle)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.775rem', marginBottom: '1rem' }}>
                   {match.factors.map((f, i) => (
                     <div key={i} style={{ color: f.points > 0 ? '#065F46' : '#64748B' }}>
